@@ -12,70 +12,6 @@ export class StepStack extends cdk.Stack {
   constructor(scope: cdk.Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // The code that defines your stack goes here
-
-    // example resource
-    // const queue = new sqs.Queue(this, 'StepQueue', {
-    //   visibilityTimeout: cdk.Duration.seconds(300)
-    // });
-
-    // const helloFunction = new lambda.Function(this, 'MyLambdaFunction', {
-    //   code: lambda.Code.fromInline(`exports.handler = (event, context, callback) => { callback(null, "Hello World!"); };`),
-    //   runtime: lambda.Runtime.NODEJS_14_X,
-    //   handler: "index.handler",
-    //   // timeout: cdk.Duration.seconds(25)
-    // });
-
-    // const stateMachine = new sfn.StateMachine(this, 'MyStateMachine', {
-    //   definition: new tasks.LambdaInvoke(this, "MyLambdaTask", {
-    //     lambdaFunction: helloFunction
-    //   }).next(new sfn.Succeed(this, "GreetedWorld"))
-    // });
-
-
-//     const functionGenerateID = new lambda.Function(this, "GenerateID", {
-//       runtime: lambda.Runtime.NODEJS_12_X,
-//       handler: "index.handler",
-//       code: lambda.Code.fromInline(`
-//         const generate = () => Math.random().toString(36).substring(7);
-
-//         exports.handler = async () => ({"value": generate()});
-//       `),
-//     });
-
-//     const functionReverseID = new lambda.Function(this, "ReverseID", {
-//       runtime: lambda.Runtime.NODEJS_12_X,
-//       handler: "index.handler",
-//       code: lambda.Code.fromInline(`
-//         const reverse = (str) => (str === '') ? '' : reverse(str.substr(1)) + str.charAt(0);
-
-//         exports.handler = async (state) => ({"value": reverse(state.value)});
-//       `),
-//     });
-
-//     const definition = new tasks.LambdaInvoke(this, "Generate ID", {
-//       lambdaFunction: functionGenerateID,
-//       outputPath: "$.Payload",
-//     })
-//       .next(
-//         new sfn.Wait(this, "Wait 1 Second", {
-//           time: sfn.WaitTime.duration(cdk.Duration.seconds(1)),
-//         })
-//       )
-//       .next(
-//         new tasks.LambdaInvoke(this, "Reverse ID", {
-//           lambdaFunction: functionReverseID,
-//           outputPath: "$.Payload",
-//         })
-//       );
-
-//     this.Machine = new sfn.StateMachine(this, "StateMachine", {
-//       definition,
-//       timeout: cdk.Duration.minutes(5),
-//     });
-
-    // const prefix = `dev-ml-`;
-
     const readManifestAndIdentifyNumberOfFiles = new lambda.Function(this, `IdentifyNumberOfFiles`, {
       runtime: lambda.Runtime.NODEJS_14_X,
       handler: "index.handler",
@@ -100,12 +36,12 @@ export class StepStack extends cdk.Stack {
          
           index = index + step
          
-          callback(null, {
+          callback(null, { iterator: {
             index,
             step,
             count,
             continue: index < count
-          })
+          }})
         }
       `),
     });
@@ -118,7 +54,7 @@ export class StepStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_14_X,
       handler: "index.handler",
       code: lambda.Code.fromInline(`
-        exports.handler = async (state) => ({"download": {"index": state.index}, "iterator": {"index": state.index, "step": state.step, "count": state.count}});
+        exports.handler = async (state) => ({"downloaded": {"index": state.iterator.index}, "iterator": state.iterator});
       `),
     });
     const downloadFileTask = new tasks.LambdaInvoke(this, "downloadFileTask", {
@@ -139,45 +75,37 @@ export class StepStack extends cdk.Stack {
       outputPath: "$.Payload",
     });
 
-    // const upload = new lambda.Function(this, "upload", {
-    //   runtime: lambda.Runtime.NODEJS_14_X,
-    //   handler: "index.handler",
-    //   code: lambda.Code.fromInline(`
-    //     exports.handler = async (state) => ({});
-    //   `),
-    // });
+    const upload = new lambda.Function(this, "upload", {
+      runtime: lambda.Runtime.NODEJS_14_X,
+      handler: "index.handler",
+      code: lambda.Code.fromInline(`
+        exports.handler = async (state) => ({});
+      `),
+    });
+    const uploadTask = new tasks.LambdaInvoke(this, "uploadTask", {
+      lambdaFunction: upload,
+      outputPath: "$.Payload",
+    });
 
-    // const callback = new lambda.Function(this, "callback", {
-    //   runtime: lambda.Runtime.NODEJS_14_X,
-    //   handler: "index.handler",
-    //   code: lambda.Code.fromInline(`
-    //     exports.handler = async (state) => ({});
-    //   `),
-    // });
+    const callback = new lambda.Function(this, "callback", {
+      runtime: lambda.Runtime.NODEJS_14_X,
+      handler: "index.handler",
+      code: lambda.Code.fromInline(`
+        exports.handler = async (state) => ({});
+      `),
+    });
+    const callbackTask = new tasks.LambdaInvoke(this, "callbackTask", {
+      lambdaFunction: callback,
+      outputPath: "$.Payload",
+    });
 
     const iteratorChoice = new sfn.Choice(this, "is count reached")
-      .when(sfn.Condition.booleanEquals('$.continue', true), downloadFileTask.next(iteratorTask))
-      .when(sfn.Condition.booleanEquals('$.continue', false), archiveTask);
+      .when(sfn.Condition.booleanEquals('$.iterator.continue', true), downloadFileTask.next(iteratorTask))
+      .when(sfn.Condition.booleanEquals('$.iterator.continue', false), archiveTask.next(uploadTask).next(callbackTask));
 
     const definition = readManifestAndIdentifyNumberOfFilesTask
       .next(iteratorTask)
       .next(iteratorChoice);
-
-    // const definition = new tasks.LambdaInvoke(this, "Generate ID", {
-    //   lambdaFunction: readManifestAndIdentifyNumberOfFiles,
-    //   outputPath: "$.Payload",
-    // })
-    // .next(
-    //   new tasks.LambdaInvoke(this, "Iterator", {
-    //     lambdaFunction: iterator,
-    //     outputPath: "$.Payload",
-    //   })
-    // )
-    // .next(
-    //   new sfn.Choice(this, "is count reached")
-    //     .when(sfn.Condition.booleanEquals('$.iterator.continue', 'true'), downloadFileTask.next(next)),
-    //     .when(sfn.Condition.booleanEquals('$.iterator.continue', 'fale'), )
-    // );
 
     this.Machine = new sfn.StateMachine(this, "StateMachine", {
       definition,
